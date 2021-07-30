@@ -2,62 +2,83 @@ import com.binance.api.client.BinanceApiClientFactory;
 import com.binance.api.client.BinanceApiRestClient;
 import com.binance.api.client.domain.market.Candlestick;
 import com.binance.api.client.domain.market.CandlestickInterval;
+import org.apache.kafka.clients.producer.*;
+import org.apache.kafka.common.serialization.StringSerializer;
 
 import java.util.List;
-import java.util.Scanner;
+import java.util.Properties;
 
 public class Main {
-    public static void main(String[] args){
-        Scanner input = new Scanner(System.in);
-
+    public static void main(String[] args) {
         //Connecting to Binance API
         BinanceApiClientFactory factory = BinanceApiClientFactory.newInstance();
         BinanceApiRestClient client = factory.newRestClient(); //Connected to Binance API
 
         long endTime = System.currentTimeMillis();
-        long startTime =  endTime - 3600000;
+        long startTime = endTime - 3600000;
 
-        //Taking input the market symbol
-        String symbol = input.next();
+        //Logger logger = LoggerFactory.getLogger(Main.class);
+        String bootstrapServers = "127.0.0.1:9092";
 
-        //e.g: Calculate mean for past 24 Hours:
-        //System.out.println(calMeanForONE_D(client,symbol,startTime,endTime));
+        //Create Producer properties
+        Properties properties = new Properties();
+        properties.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        properties.setProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        properties.setProperty(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
 
+        //Create the producer
+        KafkaProducer<String, String> producer = new KafkaProducer<>(properties);
+
+        //Get BTC/USDT Market from API and send it to KafKa
+        String BTC_Symbol = "BTCUSDT";
+        String BTC_TopicName = "BTCTopic";
+        sendThePastN_DaysDataToKafka(client, producer, BTC_Symbol, BTC_TopicName, startTime, endTime,30);
+
+        //Get ETH/BTC Market from API and send it to KafKa
+        String ETH_Symbol = "ETHBTC";
+        String ETH_TopicName = "ETHTopic";
+        sendThePastN_DaysDataToKafka(client, producer, ETH_Symbol, ETH_TopicName, startTime, endTime,7);
+
+        //Flush data
+        producer.flush();
+
+        //Flush and Close producer
+        producer.close();
     }
 
-    // Calculate mean for the past One Hour
-    public static double calMeanForONE_H(List<Candlestick> candlesticks){
-        double sum = 0.0;
-        for (Candlestick candlestick : candlesticks) {
-            sum += Double.parseDouble(candlestick.getOpen());
-        }
-
-        return sum/candlesticks.size();
-    }
-    //Calculate mean using calMeanForONE_H function for the past 24 Hours
-    public static double calMeanForONE_D(BinanceApiRestClient client, String symbol, long startTime, long endTime){
+    //Get the past ONE Day market info from API and send it to the KafKa
+    public static void sendThePastONE_DayDataToKafka(BinanceApiRestClient client, KafkaProducer<String, String> producer, String symbol, String topic, long startTime, long endTime){
         List<Candlestick> candlesticks;
-        double sumOfMean = 0.0;
         for (int i = 1; i <=24 ; i++) {
+            //Get from API
             candlesticks = client.getCandlestickBars(symbol,CandlestickInterval.ONE_MINUTE,500,startTime,endTime);
-            sumOfMean +=calMeanForONE_H(candlesticks);
+
+            //Create a producer record
+            ProducerRecord<String, String> record = new ProducerRecord<>(topic, listToString(candlesticks));
+
+            //Send data - asynchronous
+            producer.send(record);
+
             endTime = startTime;
             startTime = endTime - 3600000;
         }
-
-        return sumOfMean/24;
     }
-    //Calculate mean using calMeanForONE_D function for the past N Days
-    public static double calMeanForN_Days(BinanceApiRestClient client, String symbol, long startTime, long endTime, int numberOfDays){
-        double sumOfMean = 0.0;
+    //Get the past N [Maybe N=7 or N=30] Days market info from API and send it to the KafKa
+    public static void sendThePastN_DaysDataToKafka(BinanceApiRestClient client, KafkaProducer<String, String> producer, String symbol,String topic, long startTime, long endTime, int numberOfDays){
         for (int i = 1; i <=numberOfDays ; i++) {
-            sumOfMean +=calMeanForONE_D(client,symbol,startTime,endTime);
+            sendThePastONE_DayDataToKafka(client, producer, symbol, topic, startTime, endTime);
             endTime = startTime;
             startTime = endTime - 86400000;
         }
-
-        return sumOfMean/numberOfDays;
     }
 
+    public static String listToString(List<Candlestick> candlesticks){
+        StringBuilder stringBuilder = new StringBuilder();
+        for (Candlestick candlestick: candlesticks) {
+            stringBuilder.append(candlestick);
+            stringBuilder.append(",");
+        }
+        stringBuilder.setLength(stringBuilder.length()-1);
+        return stringBuilder.toString();
+    }
 }
-
